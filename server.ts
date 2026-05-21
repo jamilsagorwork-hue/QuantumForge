@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
 // Load environment variables
@@ -11,6 +12,22 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 const DB_PATH = path.join(process.cwd(), "database.json");
+
+// Initialize Supabase Client if configured
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+
+let supabase: any = null;
+if (supabaseUrl && supabaseKey) {
+  const sanitizedUrl = supabaseUrl.replace(/\/rest\/v1\/?$/, "").trim();
+  console.log("Initializing Supabase Client at URL:", sanitizedUrl);
+  try {
+    supabase = createClient(sanitizedUrl, supabaseKey);
+  } catch (err) {
+    console.error("Failed to initialize Supabase client:", err);
+  }
+}
+
 
 app.use(express.json());
 
@@ -232,100 +249,275 @@ function writeDB(data: any) {
 // Ensure database is initialized
 readDB();
 
-// 1. Members APIs
-app.get("/api/members", (req, res) => {
-  const db = readDB();
-  res.json(db.members);
-});
+// --- SUPABASE POSTGRESQL DATA TRANSFORMATIONS & MAPPING LAYER ---
+function mapMemberToDB(m: any) {
+  return {
+    id: m.id,
+    name: m.name,
+    role: m.role,
+    academic: m.academic,
+    roll_no: m.rollNo || null,
+    location: m.location || null,
+    specialty: m.specialty,
+    photo: m.photo || null,
+    bio: m.bio || null,
+    skills: m.skills || []
+  };
+}
 
-app.put("/api/members/:id", (req, res) => {
-  const { id } = req.params;
-  const updatedMember = req.body;
+function mapMemberFromDB(row: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    role: row.role,
+    academic: row.academic,
+    rollNo: row.roll_no || "",
+    location: row.location || "",
+    specialty: row.specialty,
+    photo: row.photo || "",
+    bio: row.bio || "",
+    skills: row.skills || []
+  };
+}
+
+function mapRequestToDB(r: any) {
+  return {
+    id: r.id,
+    client_name: r.clientName,
+    client_email: r.clientEmail,
+    project_type: r.projectType,
+    description: r.description,
+    budget: r.budget,
+    status: r.status,
+    timestamp: r.timestamp,
+    internal_notes: r.internalNotes || ""
+  };
+}
+
+function mapRequestFromDB(row: any) {
+  return {
+    id: row.id,
+    clientName: row.client_name,
+    clientEmail: row.client_email,
+    projectType: row.project_type,
+    description: row.description,
+    budget: row.budget,
+    status: row.status,
+    timestamp: row.timestamp,
+    internalNotes: row.internal_notes || ""
+  };
+}
+
+function mapProjectToDB(p: any) {
+  return {
+    id: p.id,
+    title: p.title,
+    category: p.category,
+    description: p.description,
+    metrics: p.metrics || null,
+    role_assigned: p.roleAssigned || null,
+    tech_stack: p.techStack || [],
+    features: p.features || [],
+    demo_slug: p.demoSlug || null,
+    depth_offset: p.depthOffset || null
+  };
+}
+
+function mapProjectFromDB(row: any) {
+  return {
+    id: row.id,
+    title: row.title,
+    category: row.category,
+    description: row.description,
+    metrics: row.metrics || "System Operational",
+    roleAssigned: row.role_assigned || "Coordinated Build",
+    techStack: row.tech_stack || [],
+    features: row.features || [],
+    demoSlug: row.demo_slug || "",
+    depthOffset: row.depth_offset || ""
+  };
+}
+
+// --- DATABASE OPERATIONS CONTROL NODES (SUPABASE WITH FILE FALLBACK) ---
+async function getMembers() {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from("members").select("*");
+      if (!error && data) {
+        if (data.length === 0) {
+          console.log("Supabase connected but 'members' is empty. Seeding defaults...");
+          const dbData = defaultMembers.map(mapMemberToDB);
+          const { error: seedErr } = await supabase.from("members").insert(dbData);
+          if (seedErr) console.error("Error seeding members table:", seedErr.message);
+          return defaultMembers;
+        }
+        return data.map(mapMemberFromDB);
+      }
+      console.warn("Supabase members query failure. Falling back to local database. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase members connection exception:", err.message || err);
+    }
+  }
+  return readDB().members;
+}
+
+async function updateMember(id: string, updatedData: any) {
+  if (supabase) {
+    try {
+      // Fetch existing row to merge to prevent wiping out nested attributes
+      const { data: existing } = await supabase.from("members").select("*").eq("id", id);
+      const mergedObj = { 
+        ...(existing && existing.length > 0 ? mapMemberFromDB(existing[0]) : {}),
+        ...updatedData, 
+        id 
+      };
+      const dbMapped = mapMemberToDB(mergedObj);
+      const { data, error } = await supabase.from("members").upsert(dbMapped).select();
+      if (!error && data && data.length > 0) {
+        return mapMemberFromDB(data[0]);
+      }
+      console.warn("Supabase updateMember failed. Falling back to local write. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase updateMember exception:", err.message || err);
+    }
+  }
   const db = readDB();
-  
   const index = db.members.findIndex((m: any) => m.id === id);
   if (index !== -1) {
-    db.members[index] = { ...db.members[index], ...updatedMember };
+    db.members[index] = { ...db.members[index], ...updatedData };
     writeDB(db);
-    return res.json({ status: "success", member: db.members[index] });
-  } else {
-    return res.status(404).json({ error: "Member not found" });
+    return db.members[index];
   }
-});
+  return null;
+}
 
-// 2. Client Requests APIs
-app.get("/api/requests", (req, res) => {
-  const db = readDB();
-  res.json(db.requests);
-});
-
-app.post("/api/requests", (req, res) => {
-  const newRequest = req.body;
-  if (!newRequest.clientName || !newRequest.clientEmail || !newRequest.description) {
-    return res.status(400).json({ error: "Missing required fields." });
+async function getRequests() {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from("requests").select("*").order("timestamp", { ascending: false });
+      if (!error && data) {
+        if (data.length === 0) {
+          console.log("Supabase connected but 'requests' is empty. Seeding defaults...");
+          const dbData = defaultRequests.map(mapRequestToDB);
+          const { error: seedErr } = await supabase.from("requests").insert(dbData);
+          if (seedErr) console.error("Error seeding requests table:", seedErr.message);
+          return defaultRequests;
+        }
+        return data.map(mapRequestFromDB);
+      }
+      console.warn("Supabase requests query failure. Falling back. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase requests connection exception:", err.message || err);
+    }
   }
+  return readDB().requests;
+}
 
-  const db = readDB();
+async function createRequest(newReq: any) {
   const requestEntry = {
     id: "req_" + Date.now(),
-    clientName: newRequest.clientName,
-    clientEmail: newRequest.clientEmail,
-    projectType: newRequest.projectType || "custom_app",
-    description: newRequest.description,
-    budget: newRequest.budget || "TBD",
+    clientName: newReq.clientName,
+    clientEmail: newReq.clientEmail,
+    projectType: newReq.projectType || "custom_app",
+    description: newReq.description,
+    budget: newReq.budget || "TBD",
     status: "pending",
     timestamp: new Date().toISOString(),
     internalNotes: ""
   };
 
+  if (supabase) {
+    try {
+      const mapped = mapRequestToDB(requestEntry);
+      const { data, error } = await supabase.from("requests").insert([mapped]).select();
+      if (!error && data && data.length > 0) {
+        return mapRequestFromDB(data[0]);
+      }
+      console.warn("Supabase insertRequest failure. Falling back to local save. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase insertRequest exception:", err.message || err);
+    }
+  }
+
+  const db = readDB();
   db.requests.unshift(requestEntry);
   writeDB(db);
-  res.json({ status: "success", request: requestEntry });
-});
+  return requestEntry;
+}
 
-app.put("/api/requests/:id", (req, res) => {
-  const { id } = req.params;
-  const updateData = req.body;
+async function updateRequest(id: string, updateData: any) {
+  if (supabase) {
+    try {
+      // Read current record first to merge changes cleanly
+      const { data: existing } = await supabase.from("requests").select("*").eq("id", id);
+      const mergedObj = {
+        ...(existing && existing.length > 0 ? mapRequestFromDB(existing[0]) : {}),
+        ...updateData,
+        id
+      };
+      const mapped = mapRequestToDB(mergedObj);
+      const { data, error } = await supabase.from("requests").upsert(mapped).select();
+      if (!error && data && data.length > 0) {
+        return mapRequestFromDB(data[0]);
+      }
+      console.warn("Supabase updateRequest failure. Falling back. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase updateRequest exception:", err.message || err);
+    }
+  }
   const db = readDB();
-
   const index = db.requests.findIndex((r: any) => r.id === id);
   if (index !== -1) {
     db.requests[index] = { ...db.requests[index], ...updateData };
     writeDB(db);
-    return res.json({ status: "success", request: db.requests[index] });
-  } else {
-    return res.status(404).json({ error: "Request not found" });
+    return db.requests[index];
   }
-});
+  return null;
+}
 
-app.delete("/api/requests/:id", (req, res) => {
-  const { id } = req.params;
+async function deleteRequest(id: string) {
+  if (supabase) {
+    try {
+      const { error } = await supabase.from("requests").delete().eq("id", id);
+      if (!error) return true;
+      console.warn("Supabase deleteRequest failure. Falling back. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase deleteRequest exception:", err.message || err);
+    }
+  }
   const db = readDB();
-
   const initialLength = db.requests.length;
   db.requests = db.requests.filter((r: any) => r.id !== id);
-  
   if (db.requests.length < initialLength) {
     writeDB(db);
-    return res.json({ status: "success", id });
-  } else {
-    return res.status(404).json({ error: "Request not found" });
+    return true;
   }
-});
+  return false;
+}
 
-// 2.5 Dynamic Portfolio Projects APIs
-app.get("/api/projects", (req, res) => {
-  const db = readDB();
-  res.json(db.projects || []);
-});
-
-app.post("/api/projects", (req, res) => {
-  const newProj = req.body;
-  if (!newProj.title || !newProj.category || !newProj.description) {
-    return res.status(400).json({ error: "Missing required core fields." });
+async function getProjects() {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from("projects").select("*");
+      if (!error && data) {
+        if (data.length === 0) {
+          console.log("Supabase connected but 'projects' is empty. Seeding defaults...");
+          const dbData = defaultProjects.map(mapProjectToDB);
+          const { error: seedErr } = await supabase.from("projects").insert(dbData);
+          if (seedErr) console.error("Error seeding projects table:", seedErr.message);
+          return defaultProjects;
+        }
+        return data.map(mapProjectFromDB);
+      }
+      console.warn("Supabase projects query failure. Falling back. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase projects connection exception:", err.message || err);
+    }
   }
+  return readDB().projects || [];
+}
 
-  const db = readDB();
+async function createProject(newProj: any) {
   const index = Math.floor(Math.random() * 2) === 1 ? "1" : "-1";
   const shadowColor = newProj.category === "E-Commerce" ? "cyan" : 
                       newProj.category === "AI Automation Systems" ? "indigo" :
@@ -337,45 +529,168 @@ app.post("/api/projects", (req, res) => {
     category: newProj.category,
     description: newProj.description,
     metrics: newProj.metrics || "System Operational",
-    roleAssigned: newProj.roleAssigned || "Coordinated LFC Build",
+    roleAssigned: newProj.roleAssigned || "Coordinated Build",
     techStack: Array.isArray(newProj.techStack) ? newProj.techStack : [],
     features: Array.isArray(newProj.features) ? newProj.features : [],
     demoSlug: newProj.demoSlug || "custom-live",
     depthOffset: newProj.depthOffset || `hover:-translate-y-2 hover:rotate-${index} hover:shadow-${shadowColor}-500/10`
   };
 
+  if (supabase) {
+    try {
+      const mapped = mapProjectToDB(projectEntry);
+      const { data, error } = await supabase.from("projects").insert([mapped]).select();
+      if (!error && data && data.length > 0) {
+        return mapProjectFromDB(data[0]);
+      }
+      console.warn("Supabase createProject failure. Falling back. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase createProject exception:", err.message || err);
+    }
+  }
+
+  const db = readDB();
   if (!db.projects) db.projects = [];
   db.projects.unshift(projectEntry);
   writeDB(db);
-  res.json({ status: "success", project: projectEntry });
-});
+  return projectEntry;
+}
 
-app.put("/api/projects/:id", (req, res) => {
-  const { id } = req.params;
-  const updateData = req.body;
+async function updateProject(id: string, updateData: any) {
+  if (supabase) {
+    try {
+      const { data: existing } = await supabase.from("projects").select("*").eq("id", id);
+      const mergedObj = {
+        ...(existing && existing.length > 0 ? mapProjectFromDB(existing[0]) : {}),
+        ...updateData,
+        id
+      };
+      const mapped = mapProjectToDB(mergedObj);
+      const { data, error } = await supabase.from("projects").upsert(mapped).select();
+      if (!error && data && data.length > 0) {
+        return mapProjectFromDB(data[0]);
+      }
+      console.warn("Supabase updateProject failure. Falling back. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase updateProject exception:", err.message || err);
+    }
+  }
   const db = readDB();
-
   if (!db.projects) db.projects = [];
   const index = db.projects.findIndex((p: any) => p.id === id);
   if (index !== -1) {
     db.projects[index] = { ...db.projects[index], ...updateData };
     writeDB(db);
-    return res.json({ status: "success", project: db.projects[index] });
-  } else {
-    return res.status(404).json({ error: "Project not found" });
+    return db.projects[index];
   }
-});
+  return null;
+}
 
-app.delete("/api/projects/:id", (req, res) => {
-  const { id } = req.params;
+async function deleteProject(id: string) {
+  if (supabase) {
+    try {
+      const { error } = await supabase.from("projects").delete().eq("id", id);
+      if (!error) return true;
+      console.warn("Supabase deleteProject failure. Falling back. Error:", error?.message);
+    } catch (err: any) {
+      console.warn("Supabase deleteProject exception:", err.message || err);
+    }
+  }
   const db = readDB();
-
   if (!db.projects) db.projects = [];
   const initialLength = db.projects.length;
   db.projects = db.projects.filter((p: any) => p.id !== id);
 
   if (db.projects.length < initialLength) {
     writeDB(db);
+    return true;
+  }
+  return false;
+}
+
+// 1. Members APIs
+app.get("/api/members", async (req, res) => {
+  const members = await getMembers();
+  res.json(members);
+});
+
+app.put("/api/members/:id", async (req, res) => {
+  const { id } = req.params;
+  const updatedMember = req.body;
+  const result = await updateMember(id, updatedMember);
+  if (result) {
+    return res.json({ status: "success", member: result });
+  } else {
+    return res.status(404).json({ error: "Member not found" });
+  }
+});
+
+// 2. Client Requests APIs
+app.get("/api/requests", async (req, res) => {
+  const requests = await getRequests();
+  res.json(requests);
+});
+
+app.post("/api/requests", async (req, res) => {
+  const newRequest = req.body;
+  if (!newRequest.clientName || !newRequest.clientEmail || !newRequest.description) {
+    return res.status(400).json({ error: "Missing required fields." });
+  }
+  const result = await createRequest(newRequest);
+  res.json({ status: "success", request: result });
+});
+
+app.put("/api/requests/:id", async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body;
+  const result = await updateRequest(id, updateData);
+  if (result) {
+    return res.json({ status: "success", request: result });
+  } else {
+    return res.status(404).json({ error: "Request not found" });
+  }
+});
+
+app.delete("/api/requests/:id", async (req, res) => {
+  const { id } = req.params;
+  const success = await deleteRequest(id);
+  if (success) {
+    return res.json({ status: "success", id });
+  } else {
+    return res.status(404).json({ error: "Request not found" });
+  }
+});
+
+// 2.5 Dynamic Portfolio Projects APIs
+app.get("/api/projects", async (req, res) => {
+  const projects = await getProjects();
+  res.json(projects);
+});
+
+app.post("/api/projects", async (req, res) => {
+  const newProj = req.body;
+  if (!newProj.title || !newProj.category || !newProj.description) {
+    return res.status(400).json({ error: "Missing required core fields." });
+  }
+  const result = await createProject(newProj);
+  res.json({ status: "success", project: result });
+});
+
+app.put("/api/projects/:id", async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body;
+  const result = await updateProject(id, updateData);
+  if (result) {
+    return res.json({ status: "success", project: result });
+  } else {
+    return res.status(404).json({ error: "Project not found" });
+  }
+});
+
+app.delete("/api/projects/:id", async (req, res) => {
+  const { id } = req.params;
+  const success = await deleteProject(id);
+  if (success) {
     return res.json({ status: "success", id });
   } else {
     return res.status(404).json({ error: "Project not found" });

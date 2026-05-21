@@ -792,7 +792,7 @@ export default function AdminPanel({
                   SELECT A MEMBER TO LIVE-MODIFY CORE ATTRIBUTES & BIOMETRICS
                 </p>
                 <p className="font-sans text-[10.5px] text-slate-600 max-w-sm mt-1">
-                  Click the 'Alter Bio & Skill Matrix' button of Jamil, Mahim, Fahim, or Taskeen to fine-tune active specialties and rolls.
+                  Click the 'Alter Bio & Skill Matrix' button of Jamil, Ak, Fahim, or Taskeen to fine-tune active specialties and rolls.
                 </p>
               </div>
             )}

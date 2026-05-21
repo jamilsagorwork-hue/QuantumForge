@@ -60,7 +60,7 @@ const defaultMembers = [
   },
   {
     id: "mahim_hasan",
-    name: "Mahim Al Hasan",
+    name: "Ak Suvho",
     role: "AI Automation Engineer",
     academic: "CSE Graduate from BUBT",
     rollNo: "22234103254",
@@ -148,7 +148,7 @@ const defaultRequests = [
     budget: "4000 - 6000 USD",
     status: "pending",
     timestamp: "2026-05-20T04:15:00.000Z",
-    internalNotes: "Assigned initially to Mahim Al Hasan to test model accuracy scores."
+    internalNotes: "Assigned initially to Ak Suvho to test model accuracy scores."
   }
 ];
 
@@ -171,7 +171,7 @@ const defaultProjects = [
     category: "AI Automation Systems",
     description: "An autonomous enterprise auditing system. Clients upload batch bills or invoice PDFs; the system auto-extracts line items, corrects pricing variations via a semantic logic pool, and reconciles databases asynchronously.",
     metrics: "99.8% Extraction Accuracy | -80% Auditing Overhead",
-    roleAssigned: "Lead AI Engineer: Mahim Al Hasan",
+    roleAssigned: "Lead AI Engineer: Ak Suvho",
     techStack: ["Python", "FastAPI", "Gemini 3.5 Flash", "Pinecone VectorDB", "Docker Orchestration"],
     features: ["Zero-shot text extraction model matching", "Automated multi-factor CRM synchronization", "Slack-automated event alert logs"],
     demoSlug: "aegis-auditor",
@@ -718,19 +718,19 @@ app.post("/api/estimator-chat", async (req, res) => {
 
   if (!process.env.GEMINI_API_KEY || !ai) {
     return res.json({
-      text: "🤖 **[Demo Assistant Mode]** Gemini API is not configured yet. Set `GEMINI_API_KEY` in the secrets explorer to launch complete system-cost prediction and AI software planning capabilities! Here is a prototype answer:\n\n*The LFC Team stands ready. Your custom platform/automation solution typically falls into a range of $1,500 to $4,500 depending on features. Core backend orchestration is developed by **Jamil Ahmed Sagor**, deep model structures by **Mahim Al Hasan**, immersive 3D shaders by **Fahim Faisal**, and low-latency cloud architecture by **Taskeen Rahman**.*"
+      text: "🤖 **[Demo Assistant Mode]** Gemini API is not configured yet. Set `GEMINI_API_KEY` in the secrets explorer to launch complete system-cost prediction and AI software planning capabilities! Here is a prototype answer:\n\n*The QuantumForge Team stands ready. Your custom platform/automation solution typically falls into a range of $1,500 to $4,500 depending on features. Core backend orchestration is developed by **Jamil Ahmed Sagor**, deep model structures by **Ak Suvho**, immersive 3D shaders by **Fahim Faisal**, and low-latency cloud architecture by **Taskeen Rahman**.*"
     });
   }
 
   // Construct context string including full team bio and specialties
-  const promptSystem = `You are the Intelligent AI Systems Advisor for 'LFC Learn for Career' (a premier design & software automation farm).
+  const promptSystem = `You are the Intelligent AI Systems Advisor for 'QuantumForge' (a premier design & software automation farm).
 The farm consists of 4 specialized CSE/Engineering members from BUBT:
 1. Jamil Ahmed Sagor - Full Stack Developer & Digital Product Architect (BUBT CSE, Roll: 22234103270). Specializes in React, Next.js, Secure Apps, UI/UX. Jamil handles system architecture, frontend layout, and database secure pipelines.
-2. Mahim Al Hasan - Senior AI Automation Engineer. Expert in Python, FastAPI, vector embedding indices, LangChain workflow setups, and autonomous LLM agents.
+2. Ak Suvho - Senior AI Automation Engineer. Expert in Python, FastAPI, vector embedding indices, LangChain workflow setups, and autonomous LLM agents.
 3. Fahim Faisal - Lead 3D Web & UX Designer. Expert in Three.js, spatial visuals, fluid WebGL matrices, shaders, and visual transitions.
 4. Taskeen Rahman - Chief DevOps & Cloud Infrastructure Officer. Expert in Go, microservice scaling, Docker, Kubernetes, and optimized concurrency.
 
-LFC sells:
+QuantumForge sells:
 - Custom responsive e-commerce web portals
 - Eye-catching portfolio websites
 - Custom high-performance Web Applications (SaaS, internal toolchains, corporate platforms)

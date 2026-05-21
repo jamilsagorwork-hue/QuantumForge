@@ -28,7 +28,7 @@ export const defaultMembers: TeamMember[] = [
   },
   {
     id: "mahim_hasan",
-    name: "Mahim Al Hasan",
+    name: "Ak Suvho",
     role: "AI Automation Engineer",
     academic: "CSE Graduate from BUBT",
     rollNo: "22234103254",

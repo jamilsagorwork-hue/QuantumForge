@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { TeamMember, ClientRequest, Project } from "./types";
+import { defaultMembers, defaultRequests, defaultProjects } from "./data";
 import ThreeDMatrixBackground from "./components/ThreeDMatrixBackground";
 import TeamCarousel from "./components/TeamCarousel";
 import ProjectShowroom from "./components/ProjectShowroom";
@@ -21,22 +22,76 @@ export default function App() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const mRes = await fetch("/api/members");
-      const membersData = await mRes.json();
-      setMembers(membersData);
+      
+      let finalMembers: TeamMember[] = [];
+      let finalRequests: ClientRequest[] = [];
+      let finalProjects: Project[] = [];
+      let offlineFallbackActive = false;
 
-      const rRes = await fetch("/api/requests");
-      const requestsData = await rRes.json();
-      setRequests(requestsData);
+      // 1. Fetch Members
+      try {
+        const mRes = await fetch("/api/members");
+        if (mRes.ok) {
+          finalMembers = await mRes.json();
+        } else {
+          throw new Error("HTTP non-200");
+        }
+      } catch (err) {
+        offlineFallbackActive = true;
+        const stored = localStorage.getItem("qd_members");
+        finalMembers = stored ? JSON.parse(stored) : defaultMembers;
+      }
 
-      const pRes = await fetch("/api/projects");
-      const projectsData = await pRes.json();
-      setProjects(projectsData);
+      // 2. Fetch Requests
+      try {
+        const rRes = await fetch("/api/requests");
+        if (rRes.ok) {
+          finalRequests = await rRes.json();
+        } else {
+          throw new Error("HTTP non-200");
+        }
+      } catch (err) {
+        offlineFallbackActive = true;
+        const stored = localStorage.getItem("qd_requests");
+        finalRequests = stored ? JSON.parse(stored) : defaultRequests;
+      }
 
-      setErrorStatus("");
+      // 3. Fetch Projects
+      try {
+        const pRes = await fetch("/api/projects");
+        if (pRes.ok) {
+          finalProjects = await pRes.json();
+        } else {
+          throw new Error("HTTP non-200");
+        }
+      } catch (err) {
+        offlineFallbackActive = true;
+        const stored = localStorage.getItem("qd_projects");
+        finalProjects = stored ? JSON.parse(stored) : defaultProjects;
+      }
+
+      setMembers(finalMembers);
+      setRequests(finalRequests);
+      setProjects(finalProjects);
+
+      if (offlineFallbackActive) {
+        // Save back to ensure immediate consistency
+        localStorage.setItem("qd_members", JSON.stringify(finalMembers));
+        localStorage.setItem("qd_requests", JSON.stringify(finalRequests));
+        localStorage.setItem("qd_projects", JSON.stringify(finalProjects));
+        setErrorStatus("Standard server offline or hosted on Vercel. Operating with local storage persistence enabled.");
+      } else {
+        setErrorStatus("");
+      }
     } catch (err) {
-      console.error("Data syncing error:", err);
-      setErrorStatus("Could not establish bi-directional sync connection with QuantumForge server.");
+      console.error("Critical syncing fallback:", err);
+      const storedM = localStorage.getItem("qd_members");
+      const storedR = localStorage.getItem("qd_requests");
+      const storedP = localStorage.getItem("qd_projects");
+      setMembers(storedM ? JSON.parse(storedM) : defaultMembers);
+      setRequests(storedR ? JSON.parse(storedR) : defaultRequests);
+      setProjects(storedP ? JSON.parse(storedP) : defaultProjects);
+      setErrorStatus("Operating in static browser-safe persistence node.");
     } finally {
       setLoading(false);
     }
@@ -46,8 +101,13 @@ export default function App() {
     fetchData();
   }, []);
 
-  // API wrappers to coordinate server writes
+  // API wrappers to coordinate server writes with localStorage updates
   const handleUpdateMember = async (updatedMember: TeamMember): Promise<boolean> => {
+    // 1. Optimistic / offline update always saved locally first
+    const freshMembers = members.map((m) => (m.id === updatedMember.id ? updatedMember : m));
+    setMembers(freshMembers);
+    localStorage.setItem("qd_members", JSON.stringify(freshMembers));
+
     try {
       const res = await fetch(`/api/members/${updatedMember.id}`, {
         method: "PUT",
@@ -55,19 +115,39 @@ export default function App() {
         body: JSON.stringify(updatedMember),
       });
       if (res.ok) {
-        setMembers((prev) =>
-          prev.map((m) => (m.id === updatedMember.id ? updatedMember : m))
-        );
-        return true;
+        const result = await res.json();
+        if (result && result.member) {
+          // Sync exact state returned by server if possible
+          setMembers((prev) =>
+            prev.map((m) => (m.id === updatedMember.id ? result.member : m))
+          );
+        }
       }
-      return false;
+      return true; // Return true as offline mode worked successfully too
     } catch (err) {
-      console.error("Error writing member profile:", err);
-      return false;
+      console.warn("Server profile update ignored (offline mode):", err);
+      return true;
     }
   };
 
   const handleCreateRequest = async (draftRequest: Partial<ClientRequest>): Promise<boolean> => {
+    const newId = "req_" + Date.now();
+    const newReq: ClientRequest = {
+      id: newId,
+      clientName: draftRequest.clientName || "Anonymous Node",
+      clientEmail: draftRequest.clientEmail || "info@quantumforge.net",
+      projectType: draftRequest.projectType || "custom_app",
+      description: draftRequest.description || "",
+      budget: draftRequest.budget || "TBD",
+      status: "pending",
+      timestamp: new Date().toISOString(),
+      internalNotes: draftRequest.internalNotes || ""
+    };
+
+    const freshRequests = [newReq, ...requests];
+    setRequests(freshRequests);
+    localStorage.setItem("qd_requests", JSON.stringify(freshRequests));
+
     try {
       const res = await fetch("/api/requests", {
         method: "POST",
@@ -76,17 +156,28 @@ export default function App() {
       });
       if (res.ok) {
         const result = await res.json();
-        setRequests((prev) => [result.request, ...prev]);
-        return true;
+        if (result && result.request) {
+          // Replace our temporary offline request with server-exact database entry
+          setRequests((prev) => prev.map((r) => r.id === newId ? result.request : r));
+        }
       }
-      return false;
+      return true;
     } catch (err) {
-      console.error("Error posting order request:", err);
-      return false;
+      console.warn("Server request write failed. Kept locally inside storage node.", err);
+      return true;
     }
   };
 
   const handleUpdateRequest = async (id: string, updatedData: Partial<ClientRequest>): Promise<boolean> => {
+    const freshRequests = requests.map((r) => {
+      if (r.id === id) {
+        return { ...r, ...updatedData };
+      }
+      return r;
+    });
+    setRequests(freshRequests);
+    localStorage.setItem("qd_requests", JSON.stringify(freshRequests));
+
     try {
       const res = await fetch(`/api/requests/${id}`, {
         method: "PUT",
@@ -95,36 +186,60 @@ export default function App() {
       });
       if (res.ok) {
         const result = await res.json();
-        setRequests((prev) =>
-          prev.map((r) => (r.id === id ? result.request : r))
-        );
-        return true;
+        if (result && result.request) {
+          setRequests((prev) =>
+            prev.map((r) => (r.id === id ? result.request : r))
+          );
+        }
       }
-      return false;
+      return true;
     } catch (err) {
-      console.error("Error editing request archive:", err);
-      return false;
+      console.warn("Offline requests update synced locally.", err);
+      return true;
     }
   };
 
   const handleDeleteRequest = async (id: string): Promise<boolean> => {
+    const freshRequests = requests.filter((r) => r.id !== id);
+    setRequests(freshRequests);
+    localStorage.setItem("qd_requests", JSON.stringify(freshRequests));
+
     try {
       const res = await fetch(`/api/requests/${id}`, {
         method: "DELETE",
       });
-      if (res.ok) {
-        setRequests((prev) => prev.filter((r) => r.id !== id));
-        return true;
-      }
-      return false;
+      return res.ok;
     } catch (err) {
-      console.error("Error flushing request catalog:", err);
-      return false;
+      console.warn("Server request delete skipped (kept in sync offline).");
+      return true;
     }
   };
 
   // Live dynamic project adapters
   const handleCreateProject = async (draftProject: Partial<Project>): Promise<boolean> => {
+    const newId = "proj_" + Date.now();
+    const isEcommerce = draftProject.category === "E-Commerce";
+    const isAi = draftProject.category === "AI Automation Systems";
+    const isPortfolio = draftProject.category === "Creative Portfolios";
+    const shadowColor = isEcommerce ? "cyan" : isAi ? "indigo" : isPortfolio ? "purple" : "emerald";
+
+    const newProj: Project = {
+      id: newId,
+      title: draftProject.title || "Custom High-Throughput Node",
+      category: draftProject.category || "Custom Web Apps",
+      description: draftProject.description || "Scalable digital structure architecture layout built securely.",
+      metrics: draftProject.metrics || "Active Node Output",
+      roleAssigned: draftProject.roleAssigned || "Coordinated Build",
+      techStack: Array.isArray(draftProject.techStack) ? draftProject.techStack : ["React", "TypeScript", "Tailwind CSS"],
+      features: Array.isArray(draftProject.features) ? draftProject.features : ["High performance rendering", "Sub-second reaction latency"],
+      demoSlug: draftProject.demoSlug || "custom-live",
+      depthOffset: draftProject.depthOffset || `hover:-translate-y-2 hover:rotate-1 hover:shadow-${shadowColor}-500/10`
+    };
+
+    const freshProjects = [newProj, ...projects];
+    setProjects(freshProjects);
+    localStorage.setItem("qd_projects", JSON.stringify(freshProjects));
+
     try {
       const res = await fetch("/api/projects", {
         method: "POST",
@@ -133,17 +248,27 @@ export default function App() {
       });
       if (res.ok) {
         const result = await res.json();
-        setProjects((prev) => [result.project, ...prev]);
-        return true;
+        if (result && result.project) {
+          setProjects((prev) => prev.map((p) => p.id === newId ? result.project : p));
+        }
       }
-      return false;
+      return true;
     } catch (err) {
-      console.error("Error creating project:", err);
-      return false;
+      console.warn("Server project insert skipped (saved locally).", err);
+      return true;
     }
   };
 
   const handleUpdateProject = async (id: string, updatedData: Partial<Project>): Promise<boolean> => {
+    const freshProjects = projects.map((p) => {
+      if (p.id === id) {
+        return { ...p, ...updatedData } as Project;
+      }
+      return p;
+    });
+    setProjects(freshProjects);
+    localStorage.setItem("qd_projects", JSON.stringify(freshProjects));
+
     try {
       const res = await fetch(`/api/projects/${id}`, {
         method: "PUT",
@@ -152,31 +277,32 @@ export default function App() {
       });
       if (res.ok) {
         const result = await res.json();
-        setProjects((prev) =>
-          prev.map((p) => (p.id === id ? result.project : p))
-        );
-        return true;
+        if (result && result.project) {
+          setProjects((prev) =>
+            prev.map((p) => (p.id === id ? result.project : p))
+          );
+        }
       }
-      return false;
+      return true;
     } catch (err) {
-      console.error("Error updating project details:", err);
-      return false;
+      console.warn("Offline projects details updated locally.", err);
+      return true;
     }
   };
 
   const handleDeleteProject = async (id: string): Promise<boolean> => {
+    const freshProjects = projects.filter((p) => p.id !== id);
+    setProjects(freshProjects);
+    localStorage.setItem("qd_projects", JSON.stringify(freshProjects));
+
     try {
       const res = await fetch(`/api/projects/${id}`, {
         method: "DELETE",
       });
-      if (res.ok) {
-        setProjects((prev) => prev.filter((p) => p.id !== id));
-        return true;
-      }
-      return false;
+      return res.ok;
     } catch (err) {
-      console.error("Error deleting project:", err);
-      return false;
+      console.warn("Server project deletion skipped (synced offline).");
+      return true;
     }
   };
 
